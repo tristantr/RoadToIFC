@@ -1,5 +1,5 @@
 const express = require('express');
-const { Pool } = require('pg');
+const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const path = require('path');
 
@@ -10,54 +10,31 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Configuration PostgreSQL
-const pool = new Pool({
-  user: process.env.PGUSER || 'postgres',
-  host: process.env.PGHOST || 'localhost',
-  database: process.env.PGDATABASE || 'communities_db',
-  password: process.env.PGPASSWORD || 'postgres',
-  port: process.env.PGPORT || 5432,
+// Initialisation de la base de données
+const db = new sqlite3.Database('communities.db');
+
+// Création de la table communities si elle n'existe pas
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS communities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    city TEXT NOT NULL,
+    country TEXT NOT NULL,
+    lat REAL NOT NULL,
+    lon REAL NOT NULL
+  )`);
 });
 
-// Initialisation de la base de données
-async function initDatabase() {
-  try {
-    const client = await pool.connect();
-    
-    // Activer PostGIS
-    console.log('Activation de l\'extension PostGIS...');
-    await client.query('CREATE EXTENSION IF NOT EXISTS postgis');
-    
-    // Créer la table communities avec géographie
-    console.log('Création de la table communities...');
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS communities (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        city TEXT NOT NULL,
-        country TEXT NOT NULL,
-        location GEOGRAPHY(Point, 4326) NOT NULL
-      )
-    `);
-    
-    // Vérifier si on a déjà des données
-    const result = await client.query('SELECT COUNT(*) FROM communities');
-    const count = parseInt(result.rows[0].count);
-    
-    if (count === 0) {
-      console.log('Insertion des données de test...');
-      await seedDatabase(client);
-      console.log(`Base de données initialisée avec ${seedCommunities.length} communautés.`);
-    } else {
-      console.log(`Base de données déjà initialisée avec ${count} communautés.`);
-    }
-    
-    client.release();
-    console.log('Base de données PostgreSQL + PostGIS prête !');
-  } catch (err) {
-    console.error('Erreur lors de l\'initialisation de la base :', err);
-    process.exit(1);
-  }
+// Fonction Haversine pour calculer la distance entre deux points
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371; // rayon de la Terre en km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) ** 2 +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c; // distance en km
 }
 
 // Données de test
@@ -84,116 +61,53 @@ const seedCommunities = [
   { name: "Metz Blasters", city: "Metz", country: "FR", lat: 49.1193, lon: 6.1757 }
 ];
 
-// Fonction pour insérer les données de test
-async function seedDatabase(client) {
-  for (const community of seedCommunities) {
-    await client.query(
-      'INSERT INTO communities (name, city, country, location) VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::GEOGRAPHY)',
-      [community.name, community.city, community.country, community.lon, community.lat]
-    );
-  }
+// Fonction pour initialiser les données de test
+function initializeSeedData() {
+  db.get("SELECT COUNT(*) as count FROM communities", (err, row) => {
+    if (err) {
+      console.error('Erreur lors de la vérification des données:', err);
+      return;
+    }
+    
+    if (row.count === 0) {
+      console.log('Initialisation des données de test...');
+      const stmt = db.prepare("INSERT INTO communities (name, city, country, lat, lon) VALUES (?, ?, ?, ?, ?)");
+      
+      seedCommunities.forEach(community => {
+        stmt.run([community.name, community.city, community.country, community.lat, community.lon]);
+      });
+      
+      stmt.finalize();
+      console.log('20 communautés de test ajoutées avec succès!');
+    } else {
+      console.log(`Base de données déjà initialisée avec ${row.count} communautés.`);
+    }
+  });
 }
 
-// GET /api/communities - Obtenir toutes les communautés
-app.get('/api/communities', async (req, res) => {
-  console.log('GET /api/communities appelé');
-  
-  try {
-    const result = await pool.query(`
-      SELECT id, name, city, country, 
-             ST_Y(location::geometry) as lat, 
-             ST_X(location::geometry) as lon
-      FROM communities 
-      ORDER BY id
-    `);
-    
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Erreur lors de la récupération des communautés:', err);
-    res.status(500).json({ error: 'Erreur serveur' });
-  }
-});
+// Servir les fichiers statiques
+app.use(express.static(path.join(__dirname, 'public')));
 
-// POST /api/communities - Créer une nouvelle communauté
-app.post('/api/communities', async (req, res) => {
-  console.log('POST /api/communities appelé:', req.body);
-  
-  const { name, city, country, lat, lon } = req.body;
-  
-  if (!name || !city || !country || lat === undefined || lon === undefined) {
-    return res.status(400).json({ error: 'Tous les champs sont requis' });
-  }
-  
-  try {
-    const result = await pool.query(
-      'INSERT INTO communities (name, city, country, location) VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326)::GEOGRAPHY) RETURNING id',
-      [name, city, country, lon, lat]
-    );
-    
-    res.status(201).json({
-      id: result.rows[0].id,
-      name,
-      city,
-      country,
-      lat,
-      lon
-    });
-  } catch (err) {
-    console.error('Erreur lors de la création de la communauté:', err);
-    res.status(500).json({ error: 'Erreur lors de la création de la communauté' });
-  }
-});
+// Routes API
 
-// GET /api/communities/near - Chercher des communautés à proximité
-app.get('/api/communities/near', async (req, res) => {
-  console.log('GET /api/communities/near appelé:', req.query);
-  
-  const { lat, lon, radiusKm = 30 } = req.query;
-  
-  if (!lat || !lon) {
-    return res.status(400).json({ error: 'Latitude et longitude sont requises' });
-  }
-  
-  const latitude = parseFloat(lat);
-  const longitude = parseFloat(lon);
-  const radius = parseFloat(radiusKm);
-  
-  if (isNaN(latitude) || isNaN(longitude) || isNaN(radius)) {
-    return res.status(400).json({ error: 'Paramètres numériques invalides' });
-  }
-  
-  try {
-    const result = await pool.query(`
-      SELECT id, name, city, country,
-             ST_Y(location::geometry) as lat,
-             ST_X(location::geometry) as lon,
-             ST_DistanceSphere(location, ST_MakePoint($2, $1)) / 1000 AS distance_km
-      FROM communities
-      WHERE ST_DWithin(location, ST_MakePoint($2, $1)::GEOGRAPHY, $3 * 1000)
-      ORDER BY distance_km ASC
-    `, [latitude, longitude, radius]);
-    
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Erreur lors de la recherche de proximité:', err);
-    res.status(500).json({ error: 'Erreur lors de la recherche' });
-  }
-});
-
-// Proxy Nominatim pour éviter les problèmes CORS
+// GET /api/nominatim - Proxy pour l'API Nominatim (éviter CORS)
 app.get('/api/nominatim', async (req, res) => {
   console.log('GET /api/nominatim appelé:', req.query);
+  
   const { q } = req.query;
   
   if (!q) {
     return res.status(400).json({ error: 'Paramètre q (query) requis' });
   }
-
+  
   try {
-    const https = require('https'); // Using https module for Node.js 16 compatibility
+    const https = require('https');
+    // Prioriser la France avec countrycodes=fr sans ajouter "France" à la recherche
     const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=10&accept-language=fr&countrycodes=fr&q=${encodeURIComponent(q)}`;
+    
     console.log('Requête Nominatim:', url);
-
+    
+    // Promisifier la requête https
     const rawData = await new Promise((resolve, reject) => {
       const req = https.get(url, {
         headers: {
@@ -201,22 +115,38 @@ app.get('/api/nominatim', async (req, res) => {
         }
       }, (response) => {
         let body = '';
-        response.on('data', (chunk) => { body += chunk; });
+        
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        
         response.on('end', () => {
-          try { resolve(JSON.parse(body)); } catch (err) { reject(new Error('Erreur parsing JSON: ' + err.message)); }
+          try {
+            const data = JSON.parse(body);
+            resolve(data);
+          } catch (err) {
+            reject(new Error('Erreur parsing JSON: ' + err.message));
+          }
         });
       });
-      req.on('error', (err) => { reject(new Error('Erreur requête: ' + err.message)); });
-      req.setTimeout(5000, () => { req.destroy(); reject(new Error('Timeout requête Nominatim')); });
+      
+      req.on('error', (err) => {
+        reject(new Error('Erreur requête: ' + err.message));
+      });
+      
+      req.setTimeout(5000, () => {
+        req.destroy();
+        reject(new Error('Timeout requête Nominatim'));
+      });
     });
-
+    
     console.log(`Nominatim retourne ${rawData.length} résultats bruts`);
     
-    // Debug: display all raw results
+    // Debug : afficher tous les résultats
     rawData.forEach((place, index) => {
       console.log(`${index}: ${place.display_name} - Type: ${place.type} - Classe: ${place.class}`);
     });
-
+    
     // Filtrer pour ne garder que les lieux pertinents (villes, villages, etc.)
     const filteredData = rawData.filter(place => {
       const isRelevantPlace = 
@@ -262,34 +192,110 @@ app.get('/api/nominatim', async (req, res) => {
   }
 });
 
-// Servir les fichiers statiques
-app.use(express.static(path.join(__dirname, 'public')));
+// POST /api/communities - Créer une nouvelle communauté
+app.post('/api/communities', (req, res) => {
+  console.log('POST /api/communities appelé:', req.body);
+  
+  const { name, city, country, lat, lon } = req.body;
+  
+  if (!name || !city || !country || lat === undefined || lon === undefined) {
+    return res.status(400).json({ error: 'Tous les champs sont requis' });
+  }
+  
+  const stmt = db.prepare("INSERT INTO communities (name, city, country, lat, lon) VALUES (?, ?, ?, ?, ?)");
+  stmt.run([name, city, country, lat, lon], function(err) {
+    if (err) {
+      console.error('Erreur lors de l\'insertion:', err);
+      return res.status(500).json({ error: 'Erreur lors de la création de la communauté' });
+    }
+    
+    res.status(201).json({
+      id: this.lastID,
+      name,
+      city,
+      country,
+      lat,
+      lon
+    });
+  });
+  stmt.finalize();
+});
 
-// Catch-all handler pour servir index.html pour toutes les routes non-API
+// GET /api/communities/near - Chercher des communautés à proximité
+app.get('/api/communities/near', (req, res) => {
+  console.log('GET /api/communities/near appelé:', req.query);
+  
+  const { lat, lon, radiusKm = 30 } = req.query;
+  
+  if (!lat || !lon) {
+    return res.status(400).json({ error: 'Latitude et longitude sont requises' });
+  }
+  
+  const searchLat = parseFloat(lat);
+  const searchLon = parseFloat(lon);
+  const radius = parseFloat(radiusKm);
+  
+  db.all("SELECT * FROM communities", (err, rows) => {
+    if (err) {
+      console.error('Erreur lors de la recherche:', err);
+      return res.status(500).json({ error: 'Erreur lors de la recherche' });
+    }
+    
+    // Calculer la distance pour chaque communauté et filtrer
+    const nearbyCommunities = rows
+      .map(community => ({
+        ...community,
+        distance: haversine(searchLat, searchLon, community.lat, community.lon)
+      }))
+      .filter(community => community.distance <= radius)
+      .sort((a, b) => a.distance - b.distance);
+    
+    res.json(nearbyCommunities);
+  });
+});
+
+// GET /api/communities - Obtenir toutes les communautés
+app.get('/api/communities', (req, res) => {
+  console.log('GET /api/communities appelé');
+  
+  db.all("SELECT * FROM communities", (err, rows) => {
+    if (err) {
+      console.error('Erreur lors de la récupération:', err);
+      return res.status(500).json({ error: 'Erreur lors de la récupération des communautés' });
+    }
+    
+    res.json(rows);
+  });
+});
+
+// Route pour la page d'accueil (catch-all)
 app.get('*', (req, res) => {
+  // Ne pas intercepter les routes API
   if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'Endpoint API non trouvé' });
+    return res.status(404).json({ error: 'Route API non trouvée' });
   }
   res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
-// Gestion de l'arrêt propre
-process.on('SIGINT', async () => {
-  console.log('\nArrêt du serveur...');
-  try {
-    await pool.end();
-    console.log('Connexions PostgreSQL fermées.');
-  } catch (err) {
-    console.error('Erreur lors de la fermeture:', err);
-  }
-  process.exit(0);
+// Démarrage du serveur
+app.listen(PORT, () => {
+  console.log(`Serveur démarré sur le port ${PORT}`);
+  
+  // Initialiser les données de test
+  setTimeout(() => {
+    initializeSeedData();
+  }, 1000);
 });
 
-// Démarrage du serveur
-initDatabase().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Serveur démarré sur le port ${PORT}`);
-    console.log('🏘️ Application Communautés Locales avec PostgreSQL + PostGIS');
-    console.log(`📍 Accès: http://localhost:${PORT}`);
+// Gestion de la fermeture propre de la base de données
+process.on('SIGINT', () => {
+  console.log('\nFermeture de la base de données...');
+  db.close((err) => {
+    if (err) {
+      console.error('Erreur lors de la fermeture de la base:', err);
+    } else {
+      console.log('Base de données fermée.');
+    }
+    process.exit(0);
   });
 });
