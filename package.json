@@ -10,7 +10,8 @@
     "install:pg": "./install-postgresql.sh",
     "setup:pg": "./setup-postgresql.sh",
     "start:sqlite": "./start-sqlite.sh",
-    "start:pg": "./start-postgresql.sh"
+    "start:pg": "./start-postgresql.sh",
+    "view:db": "node view-database.js"
   },
   "keywords": [
     "express",

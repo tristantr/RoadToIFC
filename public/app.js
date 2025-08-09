@@ -377,19 +377,28 @@ document.addEventListener('DOMContentLoaded', () => {
     // Gestion du formulaire de création
     document.getElementById('createForm').addEventListener('submit', createCommunity);
     
-    // Gestion du changement de rayon
-    document.getElementById('radius').addEventListener('change', () => {
+    // Gestion du slider de rayon - mise à jour temps réel
+    const radiusSlider = document.getElementById('radius');
+    const radiusValue = document.getElementById('radiusValue');
+    
+    // Mise à jour de l'affichage de la valeur en temps réel
+    radiusSlider.addEventListener('input', () => {
+        radiusValue.textContent = radiusSlider.value;
+        
         if (selectedSearchCity) {
             // Mettre à jour l'affichage du rayon sélectionné
             const selectedDiv = document.getElementById('selectedSearchCity');
-            const radius = document.getElementById('radius').value;
             selectedDiv.innerHTML = `
                 <strong>Recherche autour de :</strong> ${selectedSearchCity.name}, ${selectedSearchCity.country}
                 <br />
-                <small>Rayon : ${radius} km</small>
+                <small>Rayon : ${radiusSlider.value} km</small>
             `;
-            
-            // Relancer la recherche
+        }
+    });
+    
+    // Recherche automatique quand on relâche le slider
+    radiusSlider.addEventListener('change', () => {
+        if (selectedSearchCity) {
             searchNearby();
         }
     });
