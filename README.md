@@ -13,7 +13,7 @@ Une application web pour créer et découvrir des communautés près de chez vou
 
 ### Backend
 - **Node.js** + **Express** : Serveur API REST
-- **SQLite** : Base de données locale
+- **PostgreSQL** + **PostGIS** : Base de données géospatiale professionnelle
 - **CORS** : Gestion des requêtes cross-origin
 
 ### Frontend
@@ -26,15 +26,29 @@ Une application web pour créer et découvrir des communautés près de chez vou
 ### Prérequis
 - Node.js (v16 ou supérieur)
 - npm
+- PostgreSQL + PostGIS
 
-### 1. Installation des dépendances
+### 1. Installation de PostgreSQL (si nécessaire)
+
+```bash
+# Installation automatique (macOS/Linux)
+npm run install:pg
+
+# Ou suivez le guide détaillé
+voir POSTGRESQL_SETUP.md
+```
+
+### 2. Installation des dépendances Node.js
 
 ```bash
 # Installation des dépendances
 npm install
+
+# Test de PostgreSQL
+npm run test:pg
 ```
 
-### 2. Démarrage de l'application
+### 3. Démarrage de l'application
 
 #### Démarrage automatique (recommandé)
 
@@ -48,20 +62,19 @@ npm install
 npm start
 ```
 
-### 3. Accès à l'application
+### 4. Accès à l'application
 
 - **Application complète** : http://localhost:3001
 - **API Backend** : http://localhost:3001/api/
 
-## 🗄️ Structure de la base de données
+## 🗄️ Structure de la base de données PostgreSQL
 
 ### Table `communities`
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+- `id` (SERIAL PRIMARY KEY)
 - `name` (TEXT) - Nom de la communauté
 - `city` (TEXT) - Ville
 - `country` (TEXT) - Code pays (ex: FR)
-- `lat` (REAL) - Latitude
-- `lon` (REAL) - Longitude
+- `location` (GEOGRAPHY(Point, 4326)) - Coordonnées GPS avec PostGIS
 
 ## 🔌 API Endpoints
 
